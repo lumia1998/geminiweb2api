@@ -2,7 +2,7 @@ version: '3.8'
 
 services:
   geminiweb2api:
-    build: .
+    image: lumia1998/geminiweb2api:latest
     container_name: geminiweb2api
     ports:
       - "8000:8000"
