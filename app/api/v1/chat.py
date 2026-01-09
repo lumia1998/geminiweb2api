@@ -74,6 +74,16 @@ class ChatCompletionResponse(BaseModel):
 def _create_gemini_client(cookie_data: Dict[str, Any]) -> GeminiClient:
     """根据Cookie数据创建GeminiClient"""
     base_url = setting.global_config.get("base_url", "http://localhost:8000")
+    gemini_config = setting.gemini_config
+    
+    # 优先使用设置中的模型ID，其次是Cookie中解析的
+    model_ids = cookie_data.get("model_ids", {}).copy()
+    if gemini_config.get("flash_id"):
+        model_ids["flash"] = gemini_config["flash_id"]
+    if gemini_config.get("pro_id"):
+        model_ids["pro"] = gemini_config["pro_id"]
+    if gemini_config.get("thinking_id"):
+        model_ids["thinking"] = gemini_config["thinking_id"]
     
     return GeminiClient(
         secure_1psid=cookie_data["parsed"].get("__Secure-1PSID", ""),
@@ -83,7 +93,7 @@ def _create_gemini_client(cookie_data: Dict[str, Any]) -> GeminiClient:
         bl=cookie_data.get("bl", ""),
         cookies_str=cookie_data.get("cookie_str", ""),
         push_id=cookie_data.get("push_id", ""),
-        model_ids=cookie_data.get("model_ids", {}),
+        model_ids=model_ids,
         debug=setting.global_config.get("log_level", "INFO") == "DEBUG",
         media_base_url=base_url,
     )

@@ -339,6 +339,43 @@
                         </div>
                     </div>
 
+                    <!-- 模型 ID 配置 -->
+                    <div class="rounded-lg border border-border bg-background p-6 lg:col-span-2">
+                        <h3 class="text-sm font-semibold mb-4">🔧 模型 ID 配置<span
+                                class="text-xs text-muted-foreground ml-2">(可选，如果模型切换失效请更新)</span></h3>
+                        <div class="space-y-4">
+                            <div class="p-3 bg-blue-50 rounded-md text-xs text-gray-600">
+                                <div class="font-medium mb-1">获取方法：</div>
+                                F12 → Network → 在 Gemini 中切换模型发送消息 → 找到请求头 <code
+                                    class="bg-white px-1 rounded">x-goog-ext-525001261-jspb</code> → 复制整个数组值粘贴到下方输入框
+                            </div>
+                            <div>
+                                <label class="cfg-label">快速解析<span
+                                        class="text-xs text-muted-foreground ml-1">(粘贴请求头数组自动提取ID)</span></label>
+                                <input id="cfgQuickParse" class="cfg-input font-mono text-xs"
+                                    placeholder='粘贴如: [1,null,null,null,"56fdd199312815e2",null,null,0,[4],null,null,2]'
+                                    onpaste="parseModelId(event)">
+                            </div>
+                            <div class="grid gap-4 grid-cols-3">
+                                <div>
+                                    <label class="cfg-label">极速版 (Flash) ID</label>
+                                    <input id="cfgFlashId" class="cfg-input font-mono text-xs"
+                                        placeholder="56fdd199312815e2">
+                                </div>
+                                <div>
+                                    <label class="cfg-label">Pro 版 ID</label>
+                                    <input id="cfgProId" class="cfg-input font-mono text-xs"
+                                        placeholder="e6fa609c3fa255c0">
+                                </div>
+                                <div>
+                                    <label class="cfg-label">思考版 (Thinking) ID</label>
+                                    <input id="cfgThinkingId" class="cfg-input font-mono text-xs"
+                                        placeholder="e051ce1aa80aa576">
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- 代理设置 -->
                     <div class="rounded-lg border border-border bg-background p-6">
                         <h3 class="text-sm font-semibold mb-4">代理设置</h3>
@@ -638,6 +675,9 @@
             document.getElementById('cfgApiKey').value = m.api_key || '';
             document.getElementById('cfgProxyUrl').value = m.proxy_url || '';
             document.getElementById('cfgStreamTimeout').value = m.stream_timeout || 120;
+            document.getElementById('cfgFlashId').value = m.flash_id || '';
+            document.getElementById('cfgProId').value = m.pro_id || '';
+            document.getElementById('cfgThinkingId').value = m.thinking_id || '';
             // 加载缓存大小
             const cacheResp = await api('/api/cache/size');
             if (cacheResp?.success) document.getElementById('imageCacheSize').value = cacheResp.image_cache_size || '0 MB';
@@ -664,9 +704,31 @@
                 api_key: document.getElementById('cfgApiKey').value,
                 proxy_url: document.getElementById('cfgProxyUrl').value,
                 stream_timeout: parseInt(document.getElementById('cfgStreamTimeout').value) || 120,
+                flash_id: document.getElementById('cfgFlashId').value,
+                pro_id: document.getElementById('cfgProId').value,
+                thinking_id: document.getElementById('cfgThinkingId').value,
             };
             const resp = await api('/api/settings', { method: 'POST', body: JSON.stringify({ gemini_config: config }) });
             showToast(resp?.success ? '保存成功' : '保存失败', resp?.success ? 'success' : 'error');
+        }
+
+        // 解析模型ID
+        function parseModelId(event) {
+            setTimeout(() => {
+                const input = document.getElementById('cfgQuickParse').value;
+                try {
+                    const arr = JSON.parse(input);
+                    if (Array.isArray(arr) && arr.length > 4 && typeof arr[4] === 'string') {
+                        document.getElementById('cfgFlashId').value = arr[4];
+                        showToast('已提取模型ID: ' + arr[4], 'success');
+                        document.getElementById('cfgQuickParse').value = '';
+                    } else {
+                        showToast('无法解析，请检查格式', 'error');
+                    }
+                } catch (e) {
+                    showToast('JSON格式错误', 'error');
+                }
+            }, 100);
         }
 
         // 清理缓存
