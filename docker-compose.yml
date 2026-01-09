@@ -7,15 +7,16 @@ services:
     ports:
       - "8000:8000"
     volumes:
-      # Persist configuration and logs
-      - ./config_data.json:/app/config_data.json
+      # 配置和Cookie存储
+      - ./data:/app/data
+      # 媒体缓存
       - ./media_cache:/app/media_cache
     environment:
       - HOST=0.0.0.0
       - PORT=8000
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/v1/models')"]
+      test: ["CMD", "python", "-c", "import httpx; httpx.get('http://localhost:8000/health')"]
       interval: 30s
       timeout: 10s
       retries: 3
