@@ -1,0 +1,12 @@
+[global]
+base_url = "http://localhost:8000"
+admin_username = "admin"
+admin_password = "admin"
+log_level = "INFO"
+image_mode = "url"
+image_cache_max_size_mb = 512
+
+[gemini]
+api_key = ""
+proxy_url = ""
+stream_timeout = 120
