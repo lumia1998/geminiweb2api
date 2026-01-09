@@ -54,6 +54,22 @@ pip install -r requirements.txt
 
 ### 2. 启动服务
 
+#### 方式一：Docker 部署（推荐）
+
+```bash
+# 使用 Docker Compose 一键启动
+docker-compose up -d
+
+# 或者使用 Docker Hub 镜像
+docker run -d \
+  --name geminiweb2api \
+  -p 8000:8000 \
+  -v ./config_data.json:/app/config_data.json \
+  lumia1998/geminiweb2api:latest
+```
+
+#### 方式二：本地运行
+
 ```bash
 python server.py
 ```

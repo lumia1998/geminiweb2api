@@ -1,0 +1,33 @@
+# Git
+.git
+.gitignore
+
+# Python cache
+__pycache__
+*.py[cod]
+*$py.class
+*.pyo
+.Python
+
+# Local development config
+config.py
+
+# Runtime files (should be mounted as volumes)
+config_data.json
+api_logs.json
+media_cache/
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Documentation
+README.md
+LICENSE
+*.md
+
+# Demo files
+demo_*.py
+get_push_id.py
