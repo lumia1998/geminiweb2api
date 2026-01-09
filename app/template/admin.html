@@ -154,14 +154,7 @@
                         </select>
                     </div>
                     <div class="flex items-center gap-2">
-                        <button onclick="refreshCookies()" class="btn-icon" title="刷新列表">
-                            <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
-                                stroke="currentColor" stroke-width="2">
-                                <polyline points="23 4 23 10 17 10" />
-                                <polyline points="1 20 1 14 7 14" />
-                                <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
-                            </svg>
-                        </button>
+
                         <div id="batchActions" class="hidden items-center gap-2">
                             <button onclick="batchDelete()"
                                 class="btn-icon hover:bg-destructive/10 hover:text-destructive" title="批量删除">
@@ -576,7 +569,6 @@
           <td class="p-3 text-xs text-muted-foreground">${c.created_time ? new Date(c.created_time * 1000).toLocaleString() : '-'}</td>
           <td class="p-3 text-center">
             <button onclick="openEditModal('${c.cookie_id}')" class="btn-icon" title="编辑"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
-            <button onclick="refreshCookie('${c.cookie_id}')" class="btn-icon" title="刷新Token"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>
             <button onclick="deleteCookie('${c.cookie_id}')" class="btn-icon hover:text-destructive" title="删除"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
           </td>
         </tr>
