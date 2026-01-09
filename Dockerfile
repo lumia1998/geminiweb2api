@@ -15,18 +15,17 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
-COPY *.py .
-COPY image.png .
+COPY . .
 
-# Create media cache directory
-RUN mkdir -p /app/media_cache
+# Create necessary directories
+RUN mkdir -p data media_cache logs
 
 # Expose port
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import httpx; httpx.get('http://localhost:8000/v1/models')" || exit 1
+    CMD python -c "import httpx; httpx.get('http://localhost:8000/health')" || exit 1
 
 # Run the application
-CMD ["python", "server.py"]
+CMD ["python", "main.py"]
