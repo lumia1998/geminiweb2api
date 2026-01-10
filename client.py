@@ -108,6 +108,7 @@ class GeminiClient:
         debug: bool = False,
         media_base_url: str = None,
         image_mode: str = "url",
+        proxy_url: str = None,
     ):
         """
         初始化客户端 - 手动填写 token
@@ -124,6 +125,7 @@ class GeminiClient:
             debug: 是否打印调试信息
             media_base_url: 媒体文件的基础 URL (如 http://localhost:8000)，用于构建完整的媒体访问 URL
             image_mode: 图片返回模式 ("url" 或 "base64")
+            proxy_url: 代理 URL (如 http://127.0.0.1:7890)
         """
         self.secure_1psid = secure_1psid
         self.secure_1psidts = secure_1psidts
@@ -134,6 +136,7 @@ class GeminiClient:
         self.debug = debug
         self.media_base_url = media_base_url or ""
         self.image_mode = image_mode  # "url" 或 "base64"
+        self.proxy_url = proxy_url
         
         # 模型 ID 映射 (用于请求头选择模型)
         self.model_ids = model_ids or {
@@ -142,9 +145,14 @@ class GeminiClient:
             "thinking": "e051ce1aa80aa576",
         }
         
+        # 配置代理
+        if self.debug and proxy_url:
+            print(f"[DEBUG] 使用代理: {proxy_url}")
+        
         self.session = httpx.Client(
             timeout=1220.0,
             follow_redirects=True,
+            proxy=proxy_url,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
