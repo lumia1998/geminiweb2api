@@ -20,6 +20,11 @@ sys.path.insert(0, str(Path(__file__).parents[3]))
 from client import GeminiClient, CookieExpiredError
 
 
+# 重试配置
+MAX_RETRIES_PER_COOKIE = 3  # 每个Cookie最大重试次数
+MAX_COOKIE_SWITCHES = 3     # 最大Cookie切换次数
+
+
 router = APIRouter()
 
 
@@ -179,93 +184,108 @@ async def _stream_chat_response(client: GeminiClient, messages: List[Dict], mode
 
 @router.post("/chat/completions")
 async def chat_completions(request: ChatCompletionRequest, _: str = Depends(auth_manager.verify)):
-    """创建聊天补全"""
-    # 选择Cookie
-    cookie_data = cookie_manager.select_cookie()
-    if not cookie_data:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "error": {
-                    "message": "没有可用的Cookie，请在管理后台添加Cookie",
-                    "type": "service_unavailable",
-                    "code": "no_cookies_available"
-                }
-            }
-        )
-
-    cookie_id = cookie_data["cookie_id"]
-    logger.info(f"[Chat] 使用Cookie: {cookie_id[:8]}..., 模型: {request.model}")
-
-    try:
-        # 创建客户端
-        client = _create_gemini_client(cookie_data)
-
-        if request.stream:
-            # 流式响应
-            return StreamingResponse(
-                _stream_chat_response(client, request.messages, request.model, cookie_id),
-                media_type="text/event-stream",
-                headers={
-                    "Cache-Control": "no-cache",
-                    "Connection": "keep-alive",
-                    "X-Accel-Buffering": "no",
+    """创建聊天补全（支持自动重试和Cookie切换）"""
+    last_error = None
+    tried_cookies = set()
+    
+    for switch_count in range(MAX_COOKIE_SWITCHES):
+        # 选择Cookie（排除已尝试过的失效Cookie）
+        cookie_data = cookie_manager.select_cookie()
+        if not cookie_data:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "error": {
+                        "message": "没有可用的Cookie，请在管理后台添加Cookie",
+                        "type": "service_unavailable",
+                        "code": "no_cookies_available"
+                    }
                 }
             )
-        else:
-            # 非流式响应
-            response = client.chat(
-                messages=[{"role": m.role, "content": m.content} for m in request.messages],
-                model=request.model
-            )
 
-            # 成功后重置失败计数
-            cookie_manager.reset_failure(cookie_id)
+        cookie_id = cookie_data["cookie_id"]
+        
+        # 如果这个Cookie已经尝试过并失败，跳过
+        if cookie_id in tried_cookies:
+            continue
+            
+        logger.info(f"[Chat] 使用Cookie: {cookie_id[:8]}..., 模型: {request.model}, 切换次数: {switch_count}")
 
-            return ChatCompletionResponse(
-                id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
-                created=int(time.time()),
-                model=request.model,
-                choices=[
-                    ChatCompletionChoice(
-                        index=0,
-                        message={
-                            "role": "assistant",
-                            "content": response.choices[0].message.content if response.choices else ""
-                        },
-                        finish_reason="stop"
+        # 对当前Cookie进行重试
+        for retry in range(MAX_RETRIES_PER_COOKIE):
+            try:
+                # 创建客户端
+                client = _create_gemini_client(cookie_data)
+
+                if request.stream:
+                    # 流式响应（流式不支持重试，直接返回）
+                    return StreamingResponse(
+                        _stream_chat_response(client, request.messages, request.model, cookie_id),
+                        media_type="text/event-stream",
+                        headers={
+                            "Cache-Control": "no-cache",
+                            "Connection": "keep-alive",
+                            "X-Accel-Buffering": "no",
+                        }
                     )
-                ],
-                usage=Usage(
-                    prompt_tokens=response.usage.prompt_tokens,
-                    completion_tokens=response.usage.completion_tokens,
-                    total_tokens=response.usage.total_tokens
-                )
-            )
+                else:
+                    # 非流式响应
+                    response = client.chat(
+                        messages=[{"role": m.role, "content": m.content} for m in request.messages],
+                        model=request.model
+                    )
 
-    except CookieExpiredError as e:
-        logger.error(f"[Chat] Cookie过期: {cookie_id[:8]}... - {e}")
-        cookie_manager.record_failure(cookie_id, str(e))
-        raise HTTPException(
-            status_code=401,
-            detail={
-                "error": {
-                    "message": "Cookie已过期，请在管理后台更新",
-                    "type": "authentication_error",
-                    "code": "cookie_expired"
-                }
+                    # 成功后重置失败计数
+                    cookie_manager.reset_failure(cookie_id)
+
+                    return ChatCompletionResponse(
+                        id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
+                        created=int(time.time()),
+                        model=request.model,
+                        choices=[
+                            ChatCompletionChoice(
+                                index=0,
+                                message={
+                                    "role": "assistant",
+                                    "content": response.choices[0].message.content if response.choices else ""
+                                },
+                                finish_reason="stop"
+                            )
+                        ],
+                        usage=Usage(
+                            prompt_tokens=response.usage.prompt_tokens,
+                            completion_tokens=response.usage.completion_tokens,
+                            total_tokens=response.usage.total_tokens
+                        )
+                    )
+
+            except CookieExpiredError as e:
+                logger.warning(f"[Chat] Cookie过期: {cookie_id[:8]}... - {e}")
+                last_error = e
+                cookie_manager.record_failure(cookie_id, str(e))
+                tried_cookies.add(cookie_id)
+                break  # Cookie过期直接切换，不重试
+                
+            except Exception as e:
+                last_error = e
+                if retry < MAX_RETRIES_PER_COOKIE - 1:
+                    logger.warning(f"[Chat] 请求失败，重试 {retry + 1}/{MAX_RETRIES_PER_COOKIE}: {e}")
+                else:
+                    logger.error(f"[Chat] Cookie {cookie_id[:8]}... 重试{MAX_RETRIES_PER_COOKIE}次后失败: {e}")
+                    cookie_manager.record_failure(cookie_id, str(e))
+                    tried_cookies.add(cookie_id)
+    
+    # 所有Cookie都失败
+    error_msg = str(last_error) if last_error else "所有Cookie都不可用"
+    logger.error(f"[Chat] 所有Cookie都失败: {error_msg}")
+    raise HTTPException(
+        status_code=500,
+        detail={
+            "error": {
+                "message": f"请求失败（已尝试{len(tried_cookies)}个Cookie）: {error_msg}",
+                "type": "api_error",
+                "code": "all_cookies_failed"
             }
-        )
-    except Exception as e:
-        logger.error(f"[Chat] 请求失败: {e}")
-        cookie_manager.record_failure(cookie_id, str(e))
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": {
-                    "message": str(e),
-                    "type": "api_error",
-                    "code": "internal_error"
-                }
-            }
-        )
+        }
+    )
+
