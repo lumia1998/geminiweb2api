@@ -7,6 +7,9 @@ image_mode = "url"
 image_cache_max_size_mb = 512
 
 [gemini]
-api_key = ""
+api_key = "sk-gemini"
 proxy_url = ""
 stream_timeout = 120
+flash_id = ""
+pro_id = ""
+thinking_id = ""
