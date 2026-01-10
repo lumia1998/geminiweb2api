@@ -136,7 +136,8 @@ class GeminiClient:
         self.debug = debug
         self.media_base_url = media_base_url or ""
         self.image_mode = image_mode  # "url" 或 "base64"
-        self.proxy_url = proxy_url
+        # 代理URL：空字符串视为None，避免httpx解析空URL报错
+        self.proxy_url = proxy_url if proxy_url else None
         
         # 模型 ID 映射 (用于请求头选择模型)
         self.model_ids = model_ids or {
@@ -152,7 +153,7 @@ class GeminiClient:
         self.session = httpx.Client(
             timeout=1220.0,
             follow_redirects=True,
-            proxy=proxy_url,
+            proxy=self.proxy_url,
             headers={
                 "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                 "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
