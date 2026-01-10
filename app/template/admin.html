@@ -548,7 +548,8 @@ print(response.choices[0].message.content)</code></pre>
                                     <tr>
                                         <td class="px-3 py-2 font-medium text-gray-900">API Key</td>
                                         <td class="px-3 py-2 border-l border-gray-200 font-mono text-gray-600">sk-gemini
-                                            <span class="text-gray-400">(默认)</span></td>
+                                            <span class="text-gray-400">(默认)</span>
+                                        </td>
                                     </tr>
                                     <tr>
                                         <td class="px-3 py-2 font-medium text-gray-900">管理后台</td>
@@ -639,7 +640,47 @@ print(response.choices[0].message.content)</code></pre>
         </div>
     </div>
 
+    <!-- 编辑 Cookie 模态框 -->
+    <div id="editCookieModal" class="hidden fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+        <div
+            class="bg-background rounded-lg border border-border w-full max-w-2xl max-h-[90vh] overflow-y-auto shadow-xl">
+            <div class="flex items-center justify-between p-5 border-b border-border">
+                <h3 class="text-lg font-semibold">编辑 Cookie</h3>
+                <button onclick="closeEditCookieModal()"
+                    class="text-muted-foreground hover:text-foreground transition-colors">
+                    <svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none"
+                        stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18" />
+                        <line x1="6" y1="6" x2="18" y2="18" />
+                    </svg>
+                </button>
+            </div>
+            <div class="p-5 space-y-4">
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">Cookie ID</label>
+                    <input id="editCookieIdForUpdate" readonly
+                        class="flex h-9 w-full rounded-md border border-input bg-muted px-3 py-2 text-xs font-mono">
+                </div>
+                <div class="space-y-2">
+                    <label class="text-sm font-medium text-muted-foreground">Cookie 字符串</label>
+                    <textarea id="editCookieStrInput" rows="8" placeholder="粘贴新的Cookie字符串..."
+                        class="flex w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-ring resize-none font-mono"></textarea>
+                </div>
+                <div class="text-xs text-muted-foreground">
+                    更新后会重新解析Cookie并获取Token，原有的标签和备注将保留
+                </div>
+            </div>
+            <div class="flex items-center justify-end gap-3 p-5 border-t border-border bg-muted/30">
+                <button onclick="closeEditCookieModal()"
+                    class="inline-flex items-center justify-center rounded-md text-sm font-medium border border-input bg-background hover:bg-accent h-9 px-5">取消</button>
+                <button onclick="submitUpdateCookie()"
+                    class="inline-flex items-center justify-center rounded-md text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 h-9 px-5">更新</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+
         // 全局变量
         let cookieData = [];
         let selectedCookies = new Set();
@@ -720,7 +761,8 @@ print(response.choices[0].message.content)</code></pre>
           <td class="p-3 text-muted-foreground text-xs">${c.note || '-'}</td>
           <td class="p-3 text-xs text-muted-foreground">${c.created_time ? new Date(c.created_time * 1000).toLocaleString() : '-'}</td>
           <td class="p-3 text-center">
-            <button onclick="openEditModal('${c.cookie_id}')" class="btn-icon" title="编辑"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
+            <button onclick="openEditCookieModal('${c.cookie_id}')" class="btn-icon hover:text-blue-600" title="编辑Cookie"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/><path d="M15 4.5l3.5 3.5L22 4.5"/></svg></button>
+            <button onclick="openEditModal('${c.cookie_id}')" class="btn-icon" title="编辑标签/备注"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg></button>
             <button onclick="deleteCookie('${c.cookie_id}')" class="btn-icon hover:text-destructive" title="删除"><svg class="h-4 w-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
           </td>
         </tr>
@@ -804,6 +846,24 @@ print(response.choices[0].message.content)</code></pre>
             closeEditModal();
             loadCookies();
         }
+
+        // 编辑 Cookie 内容
+        function openEditCookieModal(id) {
+            document.getElementById('editCookieModal').classList.remove('hidden');
+            document.getElementById('editCookieIdForUpdate').value = id;
+            document.getElementById('editCookieStrInput').value = '';
+        }
+        function closeEditCookieModal() { document.getElementById('editCookieModal').classList.add('hidden'); }
+
+        async function submitUpdateCookie() {
+            const id = document.getElementById('editCookieIdForUpdate').value;
+            const cookieStr = document.getElementById('editCookieStrInput').value.trim();
+            if (!cookieStr) { showToast('请输入Cookie', 'error'); return; }
+            const resp = await api('/api/cookies/update', { method: 'POST', body: JSON.stringify({ cookie_id: id, cookie_str: cookieStr }) });
+            if (resp?.success) { showToast('更新成功', 'success'); closeEditCookieModal(); loadCookies(); }
+            else showToast(resp?.message || '更新失败', 'error');
+        }
+
 
         // 加载配置
         async function loadSettings() {

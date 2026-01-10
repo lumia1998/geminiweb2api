@@ -82,6 +82,12 @@ class RefreshCookieRequest(BaseModel):
     cookie_id: str
 
 
+class UpdateCookieRequest(BaseModel):
+    cookie_id: str
+    cookie_str: str
+
+
+
 # === 辅助函数 ===
 
 def verify_admin_session(authorization: Optional[str] = Header(None)) -> bool:
@@ -296,6 +302,21 @@ async def refresh_cookie(request: RefreshCookieRequest, _: bool = Depends(verify
     if success:
         return {"success": True, "message": "Cookie刷新成功"}
     return {"success": False, "message": "Cookie刷新失败，可能已过期"}
+
+
+@router.post("/api/cookies/update")
+async def update_cookie(request: UpdateCookieRequest, _: bool = Depends(verify_admin_session)):
+    """更新Cookie内容"""
+    try:
+        result = await cookie_manager.update_cookie(request.cookie_id, request.cookie_str)
+        logger.info(f"[Admin] 更新Cookie成功: {request.cookie_id[:8]}...")
+        return {"success": True, "message": "更新成功", "data": result}
+    except ValueError as e:
+        return {"success": False, "message": str(e)}
+    except Exception as e:
+        logger.error(f"[Admin] 更新Cookie失败: {e}")
+        return {"success": False, "message": f"更新失败: {e}"}
+
 
 
 @router.get("/api/cookies/tags/all")

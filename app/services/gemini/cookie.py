@@ -182,6 +182,50 @@ class GeminiCookieManager:
             self._mark_dirty()
             await self._save_data()
 
+    async def update_cookie(self, cookie_id: str, cookie_str: str) -> Dict[str, Any]:
+        """更新Cookie内容（保留原有的tags、note等元数据）"""
+        if cookie_id not in self._cookies:
+            raise ValueError("Cookie不存在")
+
+        # 解析新的Cookie字符串
+        parsed = self._parse_cookie_string(cookie_str)
+        if not parsed.get("__Secure-1PSID"):
+            raise ValueError("Cookie缺少必要的 __Secure-1PSID")
+
+        # 保存原有元数据
+        old_data = self._cookies[cookie_id]
+        old_tags = old_data.get("tags", [])
+        old_note = old_data.get("note", "")
+        old_created_time = old_data.get("created_time")
+        old_use_count = old_data.get("use_count", 0)
+
+        # 尝试获取新的Token
+        tokens = await self._fetch_tokens(cookie_str)
+
+        # 更新Cookie记录
+        self._cookies[cookie_id] = {
+            "cookie_str": cookie_str,
+            "parsed": parsed,
+            "snlm0e": tokens.get("snlm0e", ""),
+            "push_id": tokens.get("push_id", ""),
+            "bl": tokens.get("bl", ""),
+            "model_ids": tokens.get("model_ids", {}),
+            "status": "正常" if tokens.get("snlm0e") else "失效",
+            "created_time": old_created_time,
+            "last_used": int(time.time()),
+            "use_count": old_use_count,
+            "failure_count": 0,
+            "tags": old_tags,
+            "note": old_note,
+        }
+
+        self._mark_dirty()
+        await self._save_data()
+
+        logger.info(f"[Cookie] 更新Cookie成功: {cookie_id[:8]}...")
+        return {"cookie_id": cookie_id, "status": self._cookies[cookie_id]["status"]}
+
+
     def record_failure(self, cookie_id: str, error: str) -> None:
         """记录失败"""
         if cookie_id in self._cookies:

@@ -96,7 +96,9 @@ def _create_gemini_client(cookie_data: Dict[str, Any]) -> GeminiClient:
         model_ids=model_ids,
         debug=setting.global_config.get("log_level", "INFO") == "DEBUG",
         media_base_url=base_url,
+        image_mode=setting.global_config.get("image_mode", "url"),
     )
+
 
 
 def _format_sse_message(data: dict) -> str:

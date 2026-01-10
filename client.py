@@ -107,6 +107,7 @@ class GeminiClient:
         model_ids: dict = None,
         debug: bool = False,
         media_base_url: str = None,
+        image_mode: str = "url",
     ):
         """
         初始化客户端 - 手动填写 token
@@ -122,6 +123,7 @@ class GeminiClient:
             model_ids: 模型 ID 映射 {"flash": "xxx", "pro": "xxx", "thinking": "xxx"}
             debug: 是否打印调试信息
             media_base_url: 媒体文件的基础 URL (如 http://localhost:8000)，用于构建完整的媒体访问 URL
+            image_mode: 图片返回模式 ("url" 或 "base64")
         """
         self.secure_1psid = secure_1psid
         self.secure_1psidts = secure_1psidts
@@ -131,6 +133,7 @@ class GeminiClient:
         self.push_id = push_id
         self.debug = debug
         self.media_base_url = media_base_url or ""
+        self.image_mode = image_mode  # "url" 或 "base64"
         
         # 模型 ID 映射 (用于请求头选择模型)
         self.model_ids = model_ids or {
@@ -857,7 +860,15 @@ class GeminiClient:
                 ext = ".png"
                 mime = "image/png"
             
-            # 生成唯一文件名
+            # 根据 image_mode 决定返回格式
+            if self.image_mode == "base64":
+                # Base64 模式：直接返回 data URL
+                b64_data = base64.b64encode(content).decode()
+                if self.debug:
+                    print(f"[DEBUG] 返回 base64 data URL, 大小: {len(b64_data)} 字符")
+                return f"data:{mime};base64,{b64_data}"
+            
+            # URL 模式：保存到本地缓存并返回 URL
             import os
             media_id = f"gen_{uuid.uuid4().hex[:16]}"
             
