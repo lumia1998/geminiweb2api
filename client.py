@@ -1102,8 +1102,7 @@ class GeminiClient:
         image_paths = []
         if images and len(images) > 0:
             if not self.push_id:
-                print("⚠️  图片上传需要 push-id，请运行: python get_push_id.py")
-                print("   然后将获取的 push-id 添加到 config.py")
+                raise ValueError("图片上传需要 push-id，请运行 python get_push_id.py 获取并更新配置")
             else:
                 try:
                     for img in images:
@@ -1116,7 +1115,7 @@ class GeminiClient:
                             print(f"[DEBUG] 图片上传成功: {path[:50]}...")
                 except Exception as e:
                     print(f"⚠️  图片上传失败: {e}")
-                    image_paths = []
+                    raise Exception(f"图片上传失败: {e}")
         
         req_data = self._build_request_data(text, images, image_paths, model)
         

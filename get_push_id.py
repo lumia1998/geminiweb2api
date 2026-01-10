@@ -7,7 +7,37 @@ push-id 是图片上传所需的必要参数，格式为 feeds/xxxxx
 
 import httpx
 import re
-from config import SECURE_1PSID, SECURE_1PSIDTS, SECURE_1PSIDCC, COOKIES_STR
+import httpx
+import re
+import json
+from pathlib import Path
+
+# 读取配置
+try:
+    cookie_file = Path(__file__).parent / "data" / "cookies.json"
+    if cookie_file.exists():
+        with open(cookie_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            # 假设只有一个账号，获取第一个
+            first_key = list(data["cookies"].keys())[0]
+            cookie_data = data["cookies"][first_key]["parsed"]
+            
+            SECURE_1PSID = cookie_data.get("__Secure-1PSID", "")
+            SECURE_1PSIDTS = cookie_data.get("__Secure-1PSIDTS", "")
+            SECURE_1PSIDCC = cookie_data.get("__Secure-1PSIDCC", "")
+            COOKIES_STR = ""  # 优先使用分离的 Token
+    else:
+        print("❌ 未找到配置文件 data/cookies.json")
+        SECURE_1PSID = ""
+        SECURE_1PSIDTS = ""
+        SECURE_1PSIDCC = ""
+        COOKIES_STR = ""
+except Exception as e:
+    print(f"❌ 读取配置失败: {e}")
+    SECURE_1PSID = ""
+    SECURE_1PSIDTS = ""
+    SECURE_1PSIDCC = ""
+    COOKIES_STR = ""
 
 
 def get_push_id_from_page():
