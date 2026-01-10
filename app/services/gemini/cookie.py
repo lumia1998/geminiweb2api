@@ -285,10 +285,18 @@ class GeminiCookieManager:
                 if bl_match:
                     result["bl"] = bl_match.group(1)
 
-                # 提取 PUSH_ID (从页面中查找)
-                push_id_match = re.search(r'"FdrFJe":"([^"]+)"', text)
-                if push_id_match:
-                    result["push_id"] = push_id_match.group(1)
+                # 提取 PUSH_ID - 使用多种模式匹配 feeds/xxx 格式
+                push_id_patterns = [
+                    r'"push[_-]?id"[:\s]+"(feeds/[a-z0-9]+)"',  # "push_id": "feeds/xxx"
+                    r'"feedName"[:\s]+"(feeds/[a-z0-9]+)"',      # "feedName": "feeds/xxx"
+                    r'"clientId"[:\s]+"(feeds/[a-z0-9]+)"',      # "clientId": "feeds/xxx"
+                    r'(feeds/[a-z0-9]{10,})',                     # 直接匹配 feeds/xxx 格式
+                ]
+                for pattern in push_id_patterns:
+                    push_id_match = re.search(pattern, text, re.IGNORECASE)
+                    if push_id_match:
+                        result["push_id"] = push_id_match.group(1)
+                        break
 
                 # 提取模型ID
                 model_ids = {}
