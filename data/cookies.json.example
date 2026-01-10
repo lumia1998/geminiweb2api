@@ -1,0 +1,12 @@
+{
+  "cookies": {
+    "account_id_placeholder": {
+      "cookie_str": "将你的完整Cookie字符串粘贴在这里 (name=value; name2=value2...)",
+      "parsed": {},
+      "snlm0e": "如果你知道SNlM0e的值，填在这里",
+      "push_id": "feeds/xxxxx (这是图片上传必须的)",
+      "status": "正常",
+      "note": "参考示例"
+    }
+  }
+}

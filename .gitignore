@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Configs & Secrets
+data/cookies.json
+.env
+
+# Logs
+logs/
+*.log
+api_logs.json
+
+# Media
+media_cache/
+*.jpg
+*.png
+!static/*.png
+
+# Temp / Test files
+test_*.py
+test_*.json
+debug_*.txt
+gemini_page_debug.html
