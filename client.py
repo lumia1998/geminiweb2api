@@ -1000,6 +1000,9 @@ class GeminiClient:
         """
         发送聊天请求 (OpenAI 兼容格式)
         
+        重要：只发送最后一条用户消息，依赖 Gemini 内部会话上下文 (conversation_id, response_id)
+        来维护对话历史。前端发送的完整历史会被忽略（assistant 消息），只取最后一条 user 消息。
+        
         Args:
             messages: OpenAI 格式消息列表
             message: 简单文本消息 (与 messages 二选一)
@@ -1015,33 +1018,40 @@ class GeminiClient:
             self.reset()
         
         # 处理输入
-        text_parts = []
+        text = ""
         images = []
+        system_prompt = ""
         
         if messages:
-            # OpenAI 格式 - 合并所有消息
+            # 提取 system 消息（会作为前置指令）
             for msg in messages:
                 role = msg.get("role", "user")
                 content = msg.get("content", "")
-                
-                if role == "user":
-                    t, imgs = self._parse_content(content)
-                    if t:
-                        text_parts.append(t)
-                    if imgs:
-                        images.extend(imgs)
-                elif role == "assistant":
-                    # 助手消息也加入上下文
-                    if isinstance(content, str) and content:
-                        text_parts.append(f"[助手回复]: {content}")
-                elif role == "system":
-                    # system 消息作为前置指令
-                    if isinstance(content, str) and content:
-                        text_parts.insert(0, content)
-                
-                self.messages.append(Message(role=role, content=content))
+                if role == "system" and isinstance(content, str) and content:
+                    system_prompt = content
+                    break  # 只取第一条 system 消息
             
-            text = "\n\n".join(text_parts)
+            # 只处理最后一条 user 消息（关键修改！）
+            # 依赖 Gemini 内部的 conversation_id/response_id 来维护上下文
+            last_user_msg = None
+            for msg in reversed(messages):
+                role = msg.get("role", "user")
+                if role == "user":
+                    last_user_msg = msg
+                    break
+            
+            if last_user_msg:
+                content = last_user_msg.get("content", "")
+                t, imgs = self._parse_content(content)
+                text = t
+                images = imgs
+                
+                # 在最后一条消息前加上 system prompt
+                if system_prompt:
+                    text = f"{system_prompt}\n\n{text}"
+                
+                self.messages.append(Message(role="user", content=content))
+            
         elif message:
             text = message
             self.messages.append(Message(role="user", content=message))

@@ -3,6 +3,7 @@
 import json
 import time
 import uuid
+import hashlib
 from typing import List, Dict, Any, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -12,6 +13,7 @@ from app.core.auth import auth_manager
 from app.core.config import setting
 from app.core.logger import logger
 from app.services.gemini.cookie import cookie_manager
+from app.services.gemini.tools import build_tools_prompt, parse_tool_calls
 
 # 导入原有的 GeminiClient
 import sys
@@ -23,6 +25,53 @@ from client import GeminiClient, CookieExpiredError
 # 重试配置
 MAX_RETRIES_PER_COOKIE = 3  # 每个Cookie最大重试次数
 MAX_COOKIE_SWITCHES = 3     # 最大Cookie切换次数
+
+# 会话管理：缓存每个 Cookie 的 Client 实例和消息 hash
+_client_cache: Dict[str, GeminiClient] = {}  # cookie_id -> GeminiClient
+_session_hash_cache: Dict[str, str] = {}     # cookie_id -> last_messages_hash
+
+
+def _get_user_messages_hash(messages: List) -> str:
+    """计算所有用户消息的 hash，用于判断是否是同一会话延续"""
+    content_str = ""
+    for m in messages:
+        role = m.role if hasattr(m, 'role') else m.get('role', '')
+        if role != "user":
+            continue
+        content = m.content if hasattr(m, 'content') else m.get('content', '')
+        if isinstance(content, list):
+            # 对于包含图片的消息，只取文本部分
+            text_parts = [item.get('text', '') for item in content if item.get('type') == 'text']
+            content_str += f"{' '.join(text_parts)}|"
+        else:
+            content_str += f"{content}|"
+    return hashlib.md5(content_str.encode()).hexdigest()
+
+
+def _is_continuation(current_messages: List, last_hash: str) -> bool:
+    """
+    判断当前请求是否是上一次对话的延续
+    
+    逻辑：如果当前消息去掉最后一条用户消息后的 hash 等于上次的 hash，
+    说明是同一对话的延续
+    """
+    if not last_hash:
+        return False
+    
+    # 找到所有用户消息的索引
+    user_indices = [i for i, m in enumerate(current_messages) 
+                    if (m.role if hasattr(m, 'role') else m.get('role', '')) == "user"]
+    
+    if len(user_indices) <= 1:
+        # 只有一条用户消息，无法判断是否延续，视为新对话
+        return False
+    
+    # 去掉最后一条用户消息，计算剩余消息的 hash
+    last_user_idx = user_indices[-1]
+    prev_messages = current_messages[:last_user_idx]
+    prev_hash = _get_user_messages_hash(prev_messages)
+    
+    return prev_hash == last_hash
 
 
 router = APIRouter()
@@ -39,6 +88,19 @@ class ChatMessage(BaseModel):
         extra = "ignore"
 
 
+class ToolFunction(BaseModel):
+    """Tool function definition"""
+    name: str
+    description: Optional[str] = None
+    parameters: Optional[Dict[str, Any]] = None
+
+
+class Tool(BaseModel):
+    """Tool definition"""
+    type: str = "function"
+    function: ToolFunction
+
+
 class ChatCompletionRequest(BaseModel):
     model: str = "gemini-3.0-flash"
     messages: List[ChatMessage]
@@ -48,6 +110,8 @@ class ChatCompletionRequest(BaseModel):
     top_p: Optional[float] = None
     n: Optional[int] = None
     user: Optional[str] = None
+    tools: Optional[List[Tool]] = None
+    tool_choice: Optional[Union[str, Dict[str, Any]]] = None
 
     class Config:
         extra = "ignore"
@@ -215,8 +279,19 @@ async def chat_completions(request: ChatCompletionRequest, _: str = Depends(auth
         # 对当前Cookie进行重试
         for retry in range(MAX_RETRIES_PER_COOKIE):
             try:
-                # 创建客户端
-                client = _create_gemini_client(cookie_data)
+                # 获取或创建缓存的客户端
+                if cookie_id in _client_cache:
+                    client = _client_cache[cookie_id]
+                else:
+                    client = _create_gemini_client(cookie_data)
+                    _client_cache[cookie_id] = client
+                
+                # 检查是否是会话延续（参考 gemininixiang 的逻辑）
+                last_hash = _session_hash_cache.get(cookie_id, "")
+                if not _is_continuation(request.messages, last_hash):
+                    # 新对话，重置客户端上下文
+                    logger.debug(f"[Chat] 检测到新对话，重置上下文")
+                    client.reset()
 
                 if request.stream:
                     # 流式响应（流式不支持重试，直接返回）
@@ -230,14 +305,52 @@ async def chat_completions(request: ChatCompletionRequest, _: str = Depends(auth
                         }
                     )
                 else:
+                    # 构建消息列表
+                    messages = [{"role": m.role, "content": m.content} for m in request.messages]
+                    
+                    # 如果有 tools，添加 tools 提示词到最后一条用户消息
+                    tools_data = None
+                    if request.tools:
+                        tools_data = [{"type": t.type, "function": t.function.model_dump()} for t in request.tools]
+                        tools_prompt = build_tools_prompt(tools_data)
+                        if tools_prompt and messages:
+                            # 找到最后一条用户消息并追加 tools 提示词
+                            for i in range(len(messages) - 1, -1, -1):
+                                if messages[i]["role"] == "user":
+                                    if isinstance(messages[i]["content"], str):
+                                        messages[i]["content"] = tools_prompt + messages[i]["content"]
+                                    break
+                    
                     # 非流式响应
                     response = client.chat(
-                        messages=[{"role": m.role, "content": m.content} for m in request.messages],
+                        messages=messages,
                         model=request.model
                     )
 
                     # 成功后重置失败计数
                     cookie_manager.reset_failure(cookie_id)
+                    
+                    # 更新会话 hash 缓存（用于下次判断是否是会话延续）
+                    _session_hash_cache[cookie_id] = _get_user_messages_hash(request.messages)
+
+                    content = response.choices[0].message.content if response.choices else ""
+                    
+                    # 如果有 tools，尝试解析 tool_calls
+                    tool_calls = None
+                    finish_reason = "stop"
+                    if tools_data and content:
+                        parsed_calls, remaining_content = parse_tool_calls(content)
+                        if parsed_calls:
+                            tool_calls = parsed_calls
+                            content = None  # OpenAI 规范：有 tool_calls 时 content 为 null
+                            finish_reason = "tool_calls"
+                        else:
+                            content = remaining_content or content
+                    
+                    # 构建响应消息
+                    response_message = {"role": "assistant", "content": content}
+                    if tool_calls:
+                        response_message["tool_calls"] = tool_calls
 
                     return ChatCompletionResponse(
                         id=f"chatcmpl-{uuid.uuid4().hex[:8]}",
@@ -246,11 +359,8 @@ async def chat_completions(request: ChatCompletionRequest, _: str = Depends(auth
                         choices=[
                             ChatCompletionChoice(
                                 index=0,
-                                message={
-                                    "role": "assistant",
-                                    "content": response.choices[0].message.content if response.choices else ""
-                                },
-                                finish_reason="stop"
+                                message=response_message,
+                                finish_reason=finish_reason
                             )
                         ],
                         usage=Usage(
