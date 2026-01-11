@@ -3,7 +3,6 @@
 import json
 import time
 import uuid
-import hashlib
 from typing import List, Dict, Any, Optional, Union
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -26,52 +25,8 @@ from client import GeminiClient, CookieExpiredError
 MAX_RETRIES_PER_COOKIE = 3  # 每个Cookie最大重试次数
 MAX_COOKIE_SWITCHES = 3     # 最大Cookie切换次数
 
-# 会话管理：缓存每个 Cookie 的 Client 实例和消息 hash
-_client_cache: Dict[str, GeminiClient] = {}  # cookie_id -> GeminiClient
-_session_hash_cache: Dict[str, str] = {}     # cookie_id -> last_messages_hash
-
-
-def _get_user_messages_hash(messages: List) -> str:
-    """计算所有用户消息的 hash，用于判断是否是同一会话延续"""
-    content_str = ""
-    for m in messages:
-        role = m.role if hasattr(m, 'role') else m.get('role', '')
-        if role != "user":
-            continue
-        content = m.content if hasattr(m, 'content') else m.get('content', '')
-        if isinstance(content, list):
-            # 对于包含图片的消息，只取文本部分
-            text_parts = [item.get('text', '') for item in content if item.get('type') == 'text']
-            content_str += f"{' '.join(text_parts)}|"
-        else:
-            content_str += f"{content}|"
-    return hashlib.md5(content_str.encode()).hexdigest()
-
-
-def _is_continuation(current_messages: List, last_hash: str) -> bool:
-    """
-    判断当前请求是否是上一次对话的延续
-    
-    逻辑：如果当前消息去掉最后一条用户消息后的 hash 等于上次的 hash，
-    说明是同一对话的延续
-    """
-    if not last_hash:
-        return False
-    
-    # 找到所有用户消息的索引
-    user_indices = [i for i, m in enumerate(current_messages) 
-                    if (m.role if hasattr(m, 'role') else m.get('role', '')) == "user"]
-    
-    if len(user_indices) <= 1:
-        # 只有一条用户消息，无法判断是否延续，视为新对话
-        return False
-    
-    # 去掉最后一条用户消息，计算剩余消息的 hash
-    last_user_idx = user_indices[-1]
-    prev_messages = current_messages[:last_user_idx]
-    prev_hash = _get_user_messages_hash(prev_messages)
-    
-    return prev_hash == last_hash
+# 注意：每次请求都创建新的 GeminiClient，不缓存会话状态
+# 因为 Gemini 图片请求后会话上下文容易出问题
 
 
 router = APIRouter()
@@ -279,19 +234,8 @@ async def chat_completions(request: ChatCompletionRequest, _: str = Depends(auth
         # 对当前Cookie进行重试
         for retry in range(MAX_RETRIES_PER_COOKIE):
             try:
-                # 获取或创建缓存的客户端
-                if cookie_id in _client_cache:
-                    client = _client_cache[cookie_id]
-                else:
-                    client = _create_gemini_client(cookie_data)
-                    _client_cache[cookie_id] = client
-                
-                # 检查是否是会话延续（参考 gemininixiang 的逻辑）
-                last_hash = _session_hash_cache.get(cookie_id, "")
-                if not _is_continuation(request.messages, last_hash):
-                    # 新对话，重置客户端上下文
-                    logger.debug(f"[Chat] 检测到新对话，重置上下文")
-                    client.reset()
+                # 每次都创建新的客户端，确保会话干净（避免图片请求后上下文问题）
+                client = _create_gemini_client(cookie_data)
 
                 if request.stream:
                     # 流式响应（流式不支持重试，直接返回）
