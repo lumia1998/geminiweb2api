@@ -130,7 +130,9 @@ def _create_gemini_client(cookie_data: Dict[str, Any], session: SessionContext =
         model_ids=model_ids,
         debug=setting.global_config.get("log_level", "INFO") == "DEBUG",
         media_base_url=base_url,
+        proxy_url=gemini_config.get("proxy_url", ""),  # 添加代理配置
     )
+
     
     # 恢复会话上下文
     if session:

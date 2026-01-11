@@ -276,153 +276,76 @@ class GeminiClient:
         """
         上传图片到 Gemini 服务器
         
+        使用 CLIProxyAPI 的方式: content-push.googleapis.com + multipart form-data
+        
         Args:
             image_data: 图片二进制数据
             mime_type: 图片 MIME 类型
             
         Returns:
-            str: 上传后的图片路径（带 token）
+            str: 上传后的图片路径
         """
-        if not self.push_id:
-            raise CookieExpiredError(
-                "图片上传需要 push_id\n"
-                "获取方法: 运行 python get_push_id.py 或从浏览器 Network 中获取"
-            )
-        
         try:
-            upload_url = "https://push.clients6.google.com/upload/"
+            # 使用 CLIProxyAPI 的上传端点
+            upload_url = "https://content-push.googleapis.com/upload"
             filename = f"image_{random.randint(100000, 999999)}.png"
             
-            # 浏览器必需的头
-            browser_headers = {
-                "accept": "*/*",
-                "accept-language": "zh-CN,zh;q=0.9,en;q=0.8",
-                "origin": "https://gemini.google.com",
-                "referer": "https://gemini.google.com/",
-                "sec-fetch-dest": "empty",
-                "sec-fetch-mode": "cors",
-                "sec-fetch-site": "same-site",
-                "x-browser-channel": "stable",
-                "x-browser-copyright": "Copyright 2025 Google LLC. All Rights reserved.",
-                "x-browser-validation": "Aj9fzfu+SaGLBY9Oqr3S7RokOtM=",
-                "x-browser-year": "2025",
-                "x-client-data": "CIa2yQEIpbbJAQipncoBCNvaygEIk6HLAQiFoM0BCJaMzwEIkZHPAQiSpM8BGOyFzwEYsobPAQ==",
+            # 使用 httpx 的 files 参数，自动处理 multipart 编码
+            # 等同于 Go 的 multipart.NewWriter().CreateFormFile("file", filename)
+            files = {
+                "file": (filename, image_data, mime_type)
             }
             
-            # 第一步：获取 upload_id
-            init_headers = {
-                **browser_headers,
-                "content-type": "application/x-www-form-urlencoded;charset=utf-8",
-                "push-id": self.push_id,
-                "x-goog-upload-command": "start",
-                "x-goog-upload-header-content-length": str(len(image_data)),
-                "x-goog-upload-protocol": "resumable",
-                "x-tenant-id": "bard-storage",
-            }
-            
-            init_resp = self.session.post(upload_url, data={"File name": filename}, headers=init_headers)
-            
-            if self.debug:
-                print(f"[DEBUG] 初始化上传状态: {init_resp.status_code}")
-            
-            # 检查初始化响应状态
-            if init_resp.status_code == 401 or init_resp.status_code == 403:
-                raise CookieExpiredError(
-                    f"Cookie 已过期或无效 (HTTP {init_resp.status_code})\n"
-                    "请重新获取以下信息:\n"
-                    "1. __Secure-1PSID\n"
-                    "2. __Secure-1PSIDTS\n"
-                    "3. SNlM0e\n"
-                    "4. push_id"
-                )
-            
-            upload_id = init_resp.headers.get("x-guploader-uploadid")
-            if not upload_id:
-                raise CookieExpiredError(
-                    f"未获取到 upload_id (状态码: {init_resp.status_code})\n"
-                    "可能原因: Cookie 已过期，请重新获取所有 token"
-                )
-            
-            if self.debug:
-                print(f"[DEBUG] Upload ID: {upload_id[:50]}...")
-            
-            # 第二步：上传图片数据
-            final_upload_url = f"{upload_url}?upload_id={upload_id}&upload_protocol=resumable"
-            
+            # 请求头 (参考 CLIProxyAPI HeadersUpload)
+            # 注意：不设置 Content-Type，让 httpx 自动生成正确的 multipart boundary
             upload_headers = {
-                **browser_headers,
-                "content-type": "application/x-www-form-urlencoded;charset=utf-8",
-                "push-id": self.push_id,
-                "x-goog-upload-command": "upload, finalize",
-                "x-goog-upload-offset": "0",
-                "x-tenant-id": "bard-storage",
-                "x-client-pctx": "CgcSBWjK7pYx",
+                "Accept": "*/*",
+                "Connection": "keep-alive",
+                "Push-ID": "feeds/mcudyrk2a4khkz",  # CLIProxyAPI 固定值
             }
+            
+            if self.debug:
+                print(f"[DEBUG] 上传图片到: {upload_url}")
+                print(f"[DEBUG] 文件名: {filename}")
+                print(f"[DEBUG] 文件大小: {len(image_data)} bytes")
+                print(f"[DEBUG] MIME类型: {mime_type}")
             
             upload_resp = self.session.post(
-                final_upload_url,
+                upload_url,
                 headers=upload_headers,
-                content=image_data
+                files=files,
+                timeout=300.0
             )
             
             if self.debug:
-                print(f"[DEBUG] 上传数据状态: {upload_resp.status_code}")
+                print(f"[DEBUG] 上传状态: {upload_resp.status_code}")
                 print(f"[DEBUG] 响应头: {dict(upload_resp.headers)}")
-                print(f"[DEBUG] 响应内容完整: {upload_resp.text}")
+                print(f"[DEBUG] 响应内容: {upload_resp.text[:500] if upload_resp.text else '(empty)'}")
             
-            # 检查上传响应状态
+            # 检查响应状态
             if upload_resp.status_code == 401 or upload_resp.status_code == 403:
                 raise CookieExpiredError(
                     f"上传图片认证失败 (HTTP {upload_resp.status_code})\n"
                     "Cookie 已过期，请重新获取"
                 )
             
-            if upload_resp.status_code != 200:
-                raise Exception(f"上传图片数据失败: {upload_resp.status_code}, 响应: {upload_resp.text[:200] if upload_resp.text else '(empty)'}")
+            if upload_resp.status_code < 200 or upload_resp.status_code >= 300:
+                raise Exception(f"上传图片失败: {upload_resp.status_code}, 响应: {upload_resp.text[:200] if upload_resp.text else '(empty)'}")
             
-            # 从响应中提取图片路径
-            response_text = upload_resp.text
-            image_path = None
+            # CLIProxyAPI 返回的是纯文本路径
+            response_text = upload_resp.text.strip()
             
-            # 尝试解析 JSON
-            try:
-                response_json = json.loads(response_text)
-                image_path = self._extract_image_path(response_json)
-            except json.JSONDecodeError:
-                # 如果不是 JSON，尝试从文本中提取路径
-                match = re.search(r'/contrib_service/[^\s"\']+', response_text)
-                if match:
-                    image_path = match.group(0)
+            if self.debug:
+                print(f"[DEBUG] 图片路径: {response_text}")
             
-            # 验证图片路径完整性
-            if not image_path:
+            # 验证返回的路径
+            if not response_text:
                 raise CookieExpiredError(
-                    f"无法从响应中提取图片路径\n"
-                    f"响应内容: {response_text[:300]}\n"
+                    "上传成功但返回空路径\n"
                     "可能原因: Cookie 已过期，请重新获取所有 token"
                 )
             
-            # 检查路径是否有效（长度足够即可，新版可能不带查询参数）
-            if "/contrib_service/" in image_path:
-                # 路径长度至少要有一定长度才是有效的
-                if len(image_path) < 40:
-                    raise CookieExpiredError(
-                        f"图片路径不完整\n"
-                        f"返回路径: {image_path}\n"
-                        "原因: Cookie 已过期或权限不足\n"
-                        "解决方法:\n"
-                        "1. 重新登录 https://gemini.google.com\n"
-                        "2. 更新 config.py 中的所有 token:\n"
-                        "   - SECURE_1PSID\n"
-                        "   - SECURE_1PSIDTS\n"
-                        "   - SNLM0E\n"
-                        "   - PUSH_ID"
-                    )
-            
-            if self.debug:
-                print(f"[DEBUG] 图片路径: {image_path}")
-            
-            return image_path
+            return response_text
             
         except CookieExpiredError:
             raise
@@ -430,6 +353,8 @@ class GeminiClient:
             if self.debug:
                 print(f"[DEBUG] 上传失败: {e}")
             raise Exception(f"图片上传失败: {e}")
+
+
     
     def _extract_image_path(self, data: Any) -> str:
         """从响应数据中递归提取图片路径"""

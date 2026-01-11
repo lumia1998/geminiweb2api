@@ -378,6 +378,55 @@ class GeminiCookieManager:
             self._mark_dirty()
             await self._save_data()
 
+    async def update_cookie(self, cookie_id: str, cookie_str: str) -> Dict[str, Any]:
+        """更新Cookie的cookie_str并重新解析
+        
+        Args:
+            cookie_id: Cookie ID
+            cookie_str: 新的 Cookie 字符串
+            
+        Returns:
+            更新后的 Cookie 数据
+        """
+        if cookie_id not in self._cookies:
+            raise ValueError(f"Cookie {cookie_id} 不存在")
+        
+        # 解析 Cookie
+        parsed = {}
+        for item in cookie_str.split(";"):
+            item = item.strip()
+            if "=" in item:
+                key, value = item.split("=", 1)
+                parsed[key.strip()] = value.strip()
+        
+        # 提取关键值
+        psid = parsed.get("__Secure-1PSID", "")
+        psidts = parsed.get("__Secure-1PSIDTS", "")
+        
+        if not psid:
+            raise ValueError("Cookie 中缺少 __Secure-1PSID")
+        
+        # 更新 Cookie 数据
+        self._cookies[cookie_id]["cookie_str"] = cookie_str
+        self._cookies[cookie_id]["parsed"] = parsed
+        self._cookies[cookie_id]["secure_1psid"] = psid
+        self._cookies[cookie_id]["secure_1psidts"] = psidts
+        self._cookies[cookie_id]["status"] = "正常"
+        self._cookies[cookie_id]["failure_count"] = 0
+        self._cookies[cookie_id]["last_refresh"] = datetime.now().isoformat()
+        
+        self._mark_dirty()
+        await self._save_data()
+        
+        # 尝试刷新 token
+        success = await self.refresh_cookie(cookie_id)
+        
+        return {
+            "cookie_id": cookie_id,
+            "success": success,
+            **self._cookies[cookie_id]
+        }
+
     def record_failure(self, cookie_id: str, error: str) -> None:
         """记录失败"""
         if cookie_id in self._cookies:
@@ -406,23 +455,39 @@ class GeminiCookieManager:
         return result
 
     async def _fetch_tokens(self, cookie_str: str) -> Dict[str, Any]:
-        """从Gemini页面获取SNLM0E、PUSH_ID等Token"""
+        """从Gemini页面获取SNLM0E、PUSH_ID等Token
+        
+        参考 CLIProxyAPI 的 getAccessToken:
+        1. 先访问 google.com 获取额外 cookies (priming)
+        2. 再访问 gemini.google.com 获取 SNlM0e token
+        """
         try:
-            async with httpx.AsyncClient(timeout=TIMEOUT) as client:
-                # 设置cookies
-                cookies = {}
-                for item in cookie_str.split(";"):
-                    item = item.strip()
-                    if "=" in item:
-                        key, value = item.split("=", 1)
-                        cookies[key.strip()] = value.strip()
+            # 解析 cookie 字符串
+            cookies = {}
+            for item in cookie_str.split(";"):
+                item = item.strip()
+                if "=" in item:
+                    key, value = item.split("=", 1)
+                    cookies[key.strip()] = value.strip()
 
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
-                }
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            }
 
-                resp = await client.get("https://gemini.google.com/", cookies=cookies, headers=headers)
+            async with httpx.AsyncClient(timeout=TIMEOUT, follow_redirects=True) as client:
+                # Step 1: Prime cookies from google.com (参考 CLIProxyAPI)
+                try:
+                    await client.get("https://www.google.com/", headers=headers)
+                except Exception:
+                    pass  # 忽略 priming 失败
+
+                # Step 2: 访问 gemini.google.com 获取 token
+                resp = await client.get(
+                    "https://gemini.google.com/",
+                    cookies=cookies,
+                    headers=headers,
+                )
                 text = resp.text
 
                 result = {}
@@ -466,6 +531,7 @@ class GeminiCookieManager:
         except Exception as e:
             logger.error(f"[Cookie] 获取Token失败: {e}")
             return {}
+
 
     async def refresh_cookie(self, cookie_id: str) -> bool:
         """刷新Cookie的Token"""
