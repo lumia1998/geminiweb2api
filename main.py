@@ -41,16 +41,56 @@ async def lifespan(app: FastAPI):
     # 启动批量保存任务
     await cookie_manager.start_batch_save()
     
+    # 启动自动刷新任务 (参考 CLIProxyAPI: 15分钟间隔)
+    refresh_task = asyncio.create_task(_auto_refresh_task())
+    
     logger.info(f"服务已启动: http://{os.getenv('HOST', '0.0.0.0')}:{os.getenv('PORT', '8000')}")
+    logger.info("Cookie 自动刷新已启动 (间隔: 15分钟)")
     logger.info("=" * 50)
     
     yield
     
     # 关闭服务
     logger.info("GeminiWeb2API 关闭中...")
+    refresh_task.cancel()
+    try:
+        await refresh_task
+    except asyncio.CancelledError:
+        pass
     await cookie_manager.shutdown()
     await storage_manager.close()
     logger.info("服务已关闭")
+
+
+# === 自动刷新任务 ===
+
+AUTO_REFRESH_INTERVAL = 15 * 60  # 15分钟，参考 CLIProxyAPI
+
+async def _auto_refresh_task():
+    """自动刷新所有Cookie的1PSIDTS (每15分钟)
+    
+    参考 CLIProxyAPI 的 StartAutoRefresh:
+    interval := 15 * time.Minute
+    """
+    # 首次等待一段时间再刷新
+    await asyncio.sleep(60)  # 启动后1分钟首次检查
+    
+    while True:
+        try:
+            cookies = cookie_manager.get_cookies()
+            if cookies:
+                logger.info(f"[AutoRefresh] 开始刷新 {len(cookies)} 个Cookie...")
+                results = await cookie_manager.auto_refresh_all()
+                success = sum(1 for v in results.values() if v)
+                logger.info(f"[AutoRefresh] 刷新完成: {success}/{len(results)} 成功")
+            else:
+                logger.debug("[AutoRefresh] 没有Cookie需要刷新")
+        except Exception as e:
+            logger.error(f"[AutoRefresh] 刷新异常: {e}")
+        
+        # 等待下一次刷新
+        await asyncio.sleep(AUTO_REFRESH_INTERVAL)
+
 
 
 # 创建应用

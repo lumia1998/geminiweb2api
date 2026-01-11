@@ -1212,9 +1212,37 @@ class GeminiClient:
         self.choice_id = ""
         self.messages = []
     
+    def set_session_context(self, conversation_id: str = "", response_id: str = "", choice_id: str = ""):
+        """设置会话上下文 - 用于恢复持久化的会话
+        
+        Args:
+            conversation_id: 对话 ID
+            response_id: 响应 ID
+            choice_id: 选择 ID
+        """
+        if conversation_id:
+            self.conversation_id = conversation_id
+        if response_id:
+            self.response_id = response_id
+        if choice_id:
+            self.choice_id = choice_id
+    
+    def get_session_context(self) -> dict:
+        """获取当前会话上下文 - 用于持久化保存
+        
+        Returns:
+            dict: 包含 conversation_id, response_id, choice_id 的字典
+        """
+        return {
+            "conversation_id": self.conversation_id,
+            "response_id": self.response_id,
+            "choice_id": self.choice_id,
+        }
+    
     def get_history(self) -> List[Dict]:
         """获取消息历史 (OpenAI 格式)"""
         return [{"role": m.role, "content": m.content} for m in self.messages]
+
 
 
 # OpenAI 兼容接口
