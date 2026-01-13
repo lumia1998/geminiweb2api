@@ -1,0 +1,19 @@
+services:
+  webapi:
+    build: .
+    # Or use pre-built image:
+    # image: your-registry/webapi:latest
+    ports:
+      - "42180:8000"
+    volumes:
+      # Persist cookies and settings
+      - ./data:/app/data
+      # Persist generated images
+      - ./images:/app/webapi/static/images
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+
+volumes:
+  data:
+  images:
