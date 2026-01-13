@@ -628,7 +628,92 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
             )
             client.init()
             
-            # Use generate_content for multimodal, otherwise simple chat
+            # Handle Streaming Request - use real streaming for text-only
+            if req.stream and not image_files:
+                from fastapi.responses import StreamingResponse
+                
+                # For streaming, we need to handle it differently - use synchronous generator
+                def sync_stream_generator():
+                    chunk_id = f"chatcmpl-{uuid.uuid4()}"
+                    created = int(time.time())
+                    
+                    # First chunk with role
+                    first_chunk = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": req.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant"},
+                                "finish_reason": None
+                            }
+                        ]
+                    }
+                    yield f"data: {json.dumps(first_chunk)}\n\n"
+                    
+                    try:
+                        # Use streaming generator
+                        for chunk_text, is_final, full_output in client.generate_content_stream(prompt, [], req.model, None, None):
+                            if is_final:
+                                break
+                            
+                            if chunk_text:
+                                chunk_data = {
+                                    "id": chunk_id,
+                                    "object": "chat.completion.chunk",
+                                    "created": created,
+                                    "model": req.model,
+                                    "choices": [
+                                        {
+                                            "index": 0,
+                                            "delta": {"content": chunk_text},
+                                            "finish_reason": None
+                                        }
+                                    ]
+                                }
+                                yield f"data: {json.dumps(chunk_data)}\n\n"
+                    except Exception as e:
+                        # If streaming fails, yield error and continue
+                        error_chunk = {
+                            "id": chunk_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": req.model,
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"content": f"\n\n[Error: {str(e)}]"},
+                                    "finish_reason": None
+                                }
+                            ]
+                        }
+                        yield f"data: {json.dumps(error_chunk)}\n\n"
+                    
+                    # Stop chunk
+                    stop_data = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": req.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }
+                        ]
+                    }
+                    yield f"data: {json.dumps(stop_data)}\n\n"
+                    yield "data: [DONE]\n\n"
+                
+                # Increment usage
+                increment_cookie_usage(cookie_id)
+                
+                return StreamingResponse(sync_stream_generator(), media_type="text/event-stream")
+            
+            # Non-streaming: use generate_content for multimodal, otherwise simple chat
             if image_files:
                 output = client.generate_content(prompt, image_files, req.model, None, None)
             else:
@@ -661,7 +746,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                     
                     content += f"\n\n![Generated Image]({final_url})"
             
-            # Handle Streaming Request
+            # Handle Streaming for image operations (fallback to simulated stream)
             if req.stream:
                 from fastapi.responses import StreamingResponse
                 
@@ -669,8 +754,7 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                     chunk_id = f"chatcmpl-{uuid.uuid4()}"
                     created = int(time.time())
                     
-                    # Yield single chunk with full content (simulated stream)
-                    # Clients usually expect small chunks, but one big chunk is valid SSE
+                    # Yield single chunk with full content (simulated stream for image ops)
                     chunk_data = {
                         "id": chunk_id,
                         "object": "chat.completion.chunk",

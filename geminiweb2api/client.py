@@ -307,3 +307,118 @@ class GeminiClient:
 
     def start_chat(self, model: str = "gemini-3.0-pro", gem_id: Optional[str] = None) -> ChatSession:
         return ChatSession(self, model, gem_id)
+
+    def generate_content_stream(self, prompt: str, files: List[str], model: str, gem_id: Optional[str] = None, chat: Optional[ChatSession] = None):
+        """
+        Stream generate content - yields text chunks as they arrive.
+        Yields: (chunk_text, is_final, full_output)
+            - chunk_text: The incremental text chunk
+            - is_final: True if this is the final chunk
+            - full_output: ModelOutput object (only on final chunk, else None)
+        """
+        self._ensure_running()
+        
+        # Upload files first (not streamable)
+        uploaded_files = []
+        for f in files:
+            fid = self._upload_file(f)
+            fname = os.path.basename(f)
+            uploaded_files.append([[fid], fname])
+
+        # Construct Request JSON
+        if uploaded_files:
+            item0 = [prompt, 0, None, uploaded_files]
+        else:
+            item0 = [prompt]
+        
+        item2 = chat.metadata if chat else None
+        inner = [item0, None, item2]
+        
+        if gem_id:
+            inner.extend([None] * 16)
+            inner.append(gem_id)
+            
+        inner_json = json.dumps(inner)
+        outer = [None, inner_json]
+        outer_json = json.dumps(outer)
+        
+        params = {
+            "at": self.access_token,
+            "f.req": outer_json
+        }
+        
+        headers = Headers.Gemini.copy()
+        
+        try:
+            # Use stream=True to get response incrementally
+            resp = self.session.post(
+                Endpoints.Generate, 
+                data=params, 
+                headers=headers, 
+                timeout=120,
+                stream=True
+            )
+            resp.raise_for_status()
+        except requests.HTTPError as e:
+            if e.response.status_code == 429:
+                raise Exception("Too many requests (429)")
+            raise e
+
+        # Parse streaming response
+        accumulated_text = ""
+        last_text = ""
+        all_lines = []
+        
+        for line in resp.iter_lines(decode_unicode=True):
+            if not line:
+                continue
+            all_lines.append(line)
+            
+            # Try to extract text from this line
+            try:
+                data = json.loads(line)
+                if isinstance(data, list):
+                    # Look for the main response structure
+                    for item in data:
+                        if isinstance(item, list) and len(item) > 2 and isinstance(item[2], str):
+                            try:
+                                inner = json.loads(item[2])
+                                if isinstance(inner, list) and len(inner) > 4 and inner[4] is not None:
+                                    # Found candidates
+                                    candidates_data = inner[4]
+                                    if isinstance(candidates_data, list) and len(candidates_data) > 0:
+                                        cand = candidates_data[0]
+                                        if isinstance(cand, list) and len(cand) > 1:
+                                            if isinstance(cand[1], list) and len(cand[1]) > 0:
+                                                current_text = cand[1][0]
+                                                if current_text and current_text != last_text:
+                                                    # Calculate the delta (new text)
+                                                    if current_text.startswith(last_text):
+                                                        delta = current_text[len(last_text):]
+                                                    else:
+                                                        delta = current_text
+                                                    
+                                                    if delta:
+                                                        accumulated_text = current_text
+                                                        last_text = current_text
+                                                        yield (delta, False, None)
+                            except (json.JSONDecodeError, TypeError, IndexError):
+                                continue
+            except json.JSONDecodeError:
+                continue
+        
+        # After streaming is done, parse the full response for images etc.
+        full_text = "\n".join(all_lines)
+        try:
+            full_output = self._parse_response(full_text)
+            # Yield final marker with full output
+            yield ("", True, full_output)
+        except Exception as e:
+            # If parsing fails, just return what we have
+            from .models import ModelOutput, Candidate
+            fallback_output = ModelOutput(
+                metadata=[],
+                candidates=[Candidate(rcid="", text=accumulated_text, web_images=[], generated_images=[])],
+                chosen=0
+            )
+            yield ("", True, fallback_output)
