@@ -48,6 +48,7 @@ services:
       - "8000:8000"
     volumes:
       - ./data:/app/data
+      - ./images:/app/geminiweb2api/static/images
     environment:
       - TZ=Asia/Shanghai
     restart: always
