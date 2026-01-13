@@ -363,7 +363,6 @@ def api_save_settings(req: SettingsUpdate, _: str = Depends(verify_admin_token))
     data["settings"]["timeout"] = req.timeout
     
     save_data(data)
-    save_data(data)
     return {"success": True, "message": "设置已保存"}
 
 @app.post("/api/settings/plugin-token/regenerate")
@@ -579,132 +578,179 @@ def extract_content_and_images(content: Union[str, List[Dict[str, Any]]]) -> tup
 
 @app.post("/v1/chat/completions", dependencies=[Depends(verify_api_key)])
 async def chat_completions(req: ChatCompletionRequest, request: Request):
-    # Get an active cookie
-    cookie_data = get_active_cookie()
-    if not cookie_data:
-        raise HTTPException(status_code=503, detail="No active cookies available")
+    if not req.messages:
+        raise HTTPException(status_code=400, detail="No messages provided")
     
-    cookie_id = hashlib.md5(cookie_data["psid"].encode()).hexdigest()[:16]
-    temp_files = []  # Track temp files for cleanup
+    last_msg = req.messages[-1]
     
-    try:
-        # Create client with this cookie
-        client = GeminiClient(cookie_data["psid"], cookie_data.get("psidts", ""))
-        client.init()
+    # Extract text and images from multimodal content
+    prompt, image_files = extract_content_and_images(last_msg.content)
+    temp_files = image_files  # Track for cleanup
+    
+    # Get settings for proxy
+    settings = get_settings()
+    proxy = settings.get("proxy_url", "") or None
+    image_mode = settings.get("image_mode", "url")
+    
+    # Retry logic: try up to 3 times with different cookies
+    max_retries = 3
+    last_error = None
+    tried_cookie_ids = set()
+    
+    for attempt in range(max_retries):
+        # Get an active cookie (exclude already tried ones)
+        cookies_dict = get_cookies()
+        active_cookies = [
+            (cid, cdata) for cid, cdata in cookies_dict.items()
+            if cdata.get("status") == "正常" and cid not in tried_cookie_ids
+        ]
         
-        if not req.messages:
-            raise HTTPException(status_code=400, detail="No messages provided")
+        if not active_cookies:
+            # No more cookies to try
+            break
         
-        last_msg = req.messages[-1]
+        # Pick a random active cookie
+        cookie_id, cookie_data = random.choice(active_cookies)
+        tried_cookie_ids.add(cookie_id)
         
-        # Extract text and images from multimodal content
-        prompt, image_files = extract_content_and_images(last_msg.content)
-        temp_files = image_files  # Track for cleanup
-        
-        # Use generate_content for multimodal, otherwise simple chat
-        if image_files:
-            output = client.generate_content(prompt, image_files, req.model, None, None)
-        else:
-            chat = client.start_chat(model=req.model)
-            output = chat.send_message(prompt)
-        
-        # Increment usage
-        increment_cookie_usage(cookie_id)
-        
-        content = output.text
-        settings = get_settings()
-        image_mode = settings.get("image_mode", "url")
-        
-        if output.candidates:
-            candidate = output.candidates[output.chosen]
-            for img in candidate.generated_images:
-                local_name = save_image_locally(img.image.url, client.cookies)
-                
-                final_url = img.image.url
-                
-                if local_name:
-                    local_path = os.path.join(IMAGES_DIR, local_name)
-                    
-                    if image_mode == "base64":
-                        try:
-                            b64_str = image_to_base64(local_path)
-                            final_url = f"data:image/png;base64,{b64_str}"
-                        except:
-                            pass
-                    else:
-                        final_url = f"{request.base_url}static/images/{local_name}"
-                
-                content += f"\n\n![Generated Image]({final_url})"
-        
-        # Handle Streaming Request
-        if req.stream:
-            from fastapi.responses import StreamingResponse
+        try:
+            # Build full cookies dict from parsed cookies (contains all original cookies like NID, SID, etc.)
+            full_cookies = {}
+            if cookie_data.get("parsed"):
+                full_cookies.update(cookie_data["parsed"])
             
-            async def generate_stream():
-                chunk_id = f"chatcmpl-{uuid.uuid4()}"
-                created = int(time.time())
+            # Create client with full cookie set for image operations
+            client = GeminiClient(
+                cookie_data["psid"], 
+                cookie_data.get("psidts", ""),
+                proxy=proxy,
+                full_cookies=full_cookies if image_files else None  # Only pass full cookies for image operations
+            )
+            client.init()
+            
+            # Use generate_content for multimodal, otherwise simple chat
+            if image_files:
+                output = client.generate_content(prompt, image_files, req.model, None, None)
+            else:
+                chat = client.start_chat(model=req.model)
+                output = chat.send_message(prompt)
+            
+            # Increment usage on success
+            increment_cookie_usage(cookie_id)
+            
+            content = output.text
+            
+            if output.candidates:
+                candidate = output.candidates[output.chosen]
+                for img in candidate.generated_images:
+                    local_name = save_image_locally(img.image.url, client.cookies)
+                    
+                    final_url = img.image.url
+                    
+                    if local_name:
+                        local_path = os.path.join(IMAGES_DIR, local_name)
+                        
+                        if image_mode == "base64":
+                            try:
+                                b64_str = image_to_base64(local_path)
+                                final_url = f"data:image/png;base64,{b64_str}"
+                            except:
+                                pass
+                        else:
+                            final_url = f"{request.base_url}static/images/{local_name}"
+                    
+                    content += f"\n\n![Generated Image]({final_url})"
+            
+            # Handle Streaming Request
+            if req.stream:
+                from fastapi.responses import StreamingResponse
                 
-                # Yield single chunk with full content (simulated stream)
-                # Clients usually expect small chunks, but one big chunk is valid SSE
-                chunk_data = {
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": req.model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {"role": "assistant", "content": content},
-                            "finish_reason": None
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(chunk_data)}\n\n"
-                
-                # Stop chunk
-                stop_data = {
-                    "id": chunk_id,
-                    "object": "chat.completion.chunk",
-                    "created": created,
-                    "model": req.model,
-                    "choices": [
-                        {
-                            "index": 0,
-                            "delta": {},
-                            "finish_reason": "stop"
-                        }
-                    ]
-                }
-                yield f"data: {json.dumps(stop_data)}\n\n"
-                yield "data: [DONE]\n\n"
-                
-            return StreamingResponse(generate_stream(), media_type="text/event-stream")
+                async def generate_stream():
+                    chunk_id = f"chatcmpl-{uuid.uuid4()}"
+                    created = int(time.time())
+                    
+                    # Yield single chunk with full content (simulated stream)
+                    # Clients usually expect small chunks, but one big chunk is valid SSE
+                    chunk_data = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": req.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {"role": "assistant", "content": content},
+                                "finish_reason": None
+                            }
+                        ]
+                    }
+                    yield f"data: {json.dumps(chunk_data)}\n\n"
+                    
+                    # Stop chunk
+                    stop_data = {
+                        "id": chunk_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": req.model,
+                        "choices": [
+                            {
+                                "index": 0,
+                                "delta": {},
+                                "finish_reason": "stop"
+                            }
+                        ]
+                    }
+                    yield f"data: {json.dumps(stop_data)}\n\n"
+                    yield "data: [DONE]\n\n"
+                    
+                return StreamingResponse(generate_stream(), media_type="text/event-stream")
 
-        return ChatCompletionResponse(
-            id=f"chatcmpl-{uuid.uuid4()}",
-            created=int(time.time()),
-            model=req.model,
-            choices=[
-                ChatCompletionResponseChoice(
-                    index=0,
-                    message={"role": "assistant", "content": content},
-                    finish_reason="stop"
-                )
-            ],
-            usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        )
-    except Exception as e:
-        # Mark cookie as failed on error
-        mark_cookie_failed(cookie_id)
-        raise HTTPException(status_code=500, detail=str(e))
-    finally:
-        # Cleanup temp uploaded files
-        for f in temp_files:
-            try:
-                if os.path.exists(f):
-                    os.remove(f)
-            except:
-                pass
+            return ChatCompletionResponse(
+                id=f"chatcmpl-{uuid.uuid4()}",
+                created=int(time.time()),
+                model=req.model,
+                choices=[
+                    ChatCompletionResponseChoice(
+                        index=0,
+                        message={"role": "assistant", "content": content},
+                        finish_reason="stop"
+                    )
+                ],
+                usage={"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            )
+            
+        except Exception as e:
+            last_error = e
+            error_msg = str(e).lower()
+            
+            # Check if this is a retryable error (auth/cookie related)
+            is_retryable = any(keyword in error_msg for keyword in [
+                "503", "401", "unauthorized", "auth", "cookie", "token", "psid", "expired"
+            ])
+            
+            if is_retryable:
+                print(f"Attempt {attempt + 1}/{max_retries} failed with cookie {cookie_id[:8]}...: {e}")
+                # Mark cookie as potentially problematic (don't mark as failed yet, just increment failure count)
+                if attempt == max_retries - 1:
+                    # Only mark as failed on last retry
+                    mark_cookie_failed(cookie_id)
+            else:
+                # Non-retryable error, mark cookie as failed and raise immediately
+                mark_cookie_failed(cookie_id)
+                raise HTTPException(status_code=500, detail=str(e))
+        
+        finally:
+            # Cleanup temp uploaded files only on last attempt or success
+            if attempt == max_retries - 1 or 'output' in locals():
+                for f in temp_files:
+                    try:
+                        if os.path.exists(f):
+                            os.remove(f)
+                    except:
+                        pass
+    
+    # All retries exhausted
+    raise HTTPException(status_code=503, detail=f"All cookies failed. Last error: {last_error}")
 
 @app.get("/v1/models")
 def list_models():

@@ -12,10 +12,19 @@ from .auth import get_access_token, rotate_1psidts, AuthError
 from .conversation import ChatSession
 
 class GeminiClient:
-    def __init__(self, secure_1psid: str, secure_1psidts: Optional[str] = None, proxy: Optional[str] = None, on_cookies_updated: Optional[Callable[[Dict[str, str]], None]] = None):
-        self.cookies = {"__Secure-1PSID": secure_1psid}
-        if secure_1psidts:
-            self.cookies["__Secure-1PSIDTS"] = secure_1psidts
+    def __init__(self, secure_1psid: str, secure_1psidts: Optional[str] = None, proxy: Optional[str] = None, on_cookies_updated: Optional[Callable[[Dict[str, str]], None]] = None, full_cookies: Optional[Dict[str, str]] = None):
+        # If full_cookies provided, use it as base (for image operations that need more cookies)
+        if full_cookies:
+            self.cookies = full_cookies.copy()
+            # Ensure required cookies are present
+            if secure_1psid:
+                self.cookies["__Secure-1PSID"] = secure_1psid
+            if secure_1psidts:
+                self.cookies["__Secure-1PSIDTS"] = secure_1psidts
+        else:
+            self.cookies = {"__Secure-1PSID": secure_1psid}
+            if secure_1psidts:
+                self.cookies["__Secure-1PSIDTS"] = secure_1psidts
         
         self.proxy = proxy
         self.session = requests.Session()
