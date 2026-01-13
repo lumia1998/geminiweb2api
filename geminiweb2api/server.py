@@ -615,7 +615,6 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
         settings = get_settings()
         image_mode = settings.get("image_mode", "url")
         
-        # Process Generated Images
         if output.candidates:
             candidate = output.candidates[output.chosen]
             for img in candidate.generated_images:
@@ -637,6 +636,50 @@ async def chat_completions(req: ChatCompletionRequest, request: Request):
                 
                 content += f"\n\n![Generated Image]({final_url})"
         
+        # Handle Streaming Request
+        if req.stream:
+            from fastapi.responses import StreamingResponse
+            
+            async def generate_stream():
+                chunk_id = f"chatcmpl-{uuid.uuid4()}"
+                created = int(time.time())
+                
+                # Yield single chunk with full content (simulated stream)
+                # Clients usually expect small chunks, but one big chunk is valid SSE
+                chunk_data = {
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": req.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {"role": "assistant", "content": content},
+                            "finish_reason": None
+                        }
+                    ]
+                }
+                yield f"data: {json.dumps(chunk_data)}\n\n"
+                
+                # Stop chunk
+                stop_data = {
+                    "id": chunk_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": req.model,
+                    "choices": [
+                        {
+                            "index": 0,
+                            "delta": {},
+                            "finish_reason": "stop"
+                        }
+                    ]
+                }
+                yield f"data: {json.dumps(stop_data)}\n\n"
+                yield "data: [DONE]\n\n"
+                
+            return StreamingResponse(generate_stream(), media_type="text/event-stream")
+
         return ChatCompletionResponse(
             id=f"chatcmpl-{uuid.uuid4()}",
             created=int(time.time()),
